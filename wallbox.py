@@ -40,12 +40,12 @@ class WallboxBLEApiConst:
     START_STOP_CHARGING = "w_cha"
 
     STATUS_CODES = [
-        "READY", "CHARGING", "CONNECTED_WAITING_CAR", "CONNECTED_WAITING_SCHEDULE",
-        "PAUSED", "SCHEDULE_END", "LOCKED", "ERROR", "CONNECTED_WAITING_CURRENT_ASSIGNATION",
-        "UNCONFIGURED_POWER_SHARING", "QUEUE_BY_POWER_BOOST", "DISCHARGING",
-        "CONNECTED_WAITING_ADMIN_AUTH_FOR_MID", "CONNECTED_MID_SAFETY_MARGIN_EXCEEDED",
-        "OCPP_UNAVAILABLE", "OCPP_CHARGE_FINISHING", "OCPP_RESERVED", "UPDATING",
-        "QUEUE_BY_ECO_SMART"
+        "Ready", "Charging", "Connected, waiting car", "Connected, waiting schedule",
+        "Paused", "Schedule ended", "Locked", "Error", "Connected, waiting current assignation",
+        "Unconfigured Power Sharing", "Queue by Power Boost", "Discharging",
+        "Connected, waiting admin auth for MID", "Connected, MID safety margin exceeded",
+        "OCPP Unavailable", "OCPP Charge Finishing", "OCPP Reserved", "Updating",
+        "Queue by Eco Smart"
     ]
 
 class WallboxBLEApiClient:
@@ -156,7 +156,7 @@ def publish_discovery(mqtt_client):
     # Lock
     mqtt_client.publish(f"homeassistant/lock/{DEVICE_ID}/config", json.dumps({
         "name": "Lock", "state_topic": state_topic,
-        "value_template": "{{ 'LOCKED' if value_json.status_code == 6 else 'UNLOCKED' }}",
+        "value_template": "{{ 'LOCKED' if value_json.status_code != 6 else 'UNLOCKED' }}",
         "command_topic": f"homeassistant/lock/{DEVICE_ID}/set", "unique_id": f"{DEVICE_ID}_lock", "device": dev_info
     }), qos=1, retain=True)
 
