@@ -1,0 +1,21 @@
+[Unit]
+Description=Bluetooth to MQTT Bridge for Wallbox
+After=network.target
+Documentation=https://github.com/hbldh/bleak
+
+[Service]
+Type=simple
+User=YOUR-USER
+WorkingDirectory=/home/YOUR-USER/ble-wallbox
+# Using our venv (.venv)
+ExecStart=/home/YOUR-USER/ble-wallbox/.venv/bin/python wallbox.py
+
+# Auto restart in case of failure
+Restart=always
+RestartSec=10
+
+# Force python to log directly (without buffer)
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
