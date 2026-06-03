@@ -64,7 +64,7 @@ class WallboxBLEApiClient:
         self._rx_event.clear()
 
     async def connect(self):
-        LOGGER.info(f"Connexion Bluetooth à la Wallbox ({self.address})...")
+        LOGGER.info(f"Connecting Bluetooth to Wallbox ({self.address})...")
         self.client = BleakClient(self.address)
         await self.client.connect()
         
@@ -74,7 +74,7 @@ class WallboxBLEApiClient:
             pass
 
         await self.client.start_notify(WallboxBLEApiConst.UART_TX_CHAR_UUID, self.notification_handler)
-        LOGGER.info("Bluetooth connecté et prêt !")
+        LOGGER.info("Bluetooth connected and ready!")
 
     async def get_parsed_response(self, request_id):
         while True:
@@ -94,7 +94,7 @@ class WallboxBLEApiClient:
 
     async def request(self, method, parameter=None):
         if not self.client or not self.client.is_connected:
-            LOGGER.warning("Commande avortée : Bluetooth déconnecté.")
+            LOGGER.warning("Command aborted: Bluetooth disconnected.")
             return False, None
 
         request_id = random.randint(1, 999)
@@ -118,15 +118,16 @@ class WallboxBLEApiClient:
             response = await asyncio.wait_for(self.get_parsed_response(request_id), timeout=3.0)
             return True, response
         except asyncio.TimeoutError:
-            LOGGER.warning(f"Timeout sur la requête BLE {method}")
+            LOGGER.warning(f"Timeout on BLE request {method}")
             return False, None
         except Exception as e:
-            LOGGER.error(f"Erreur d'exécution BLE {method} : {e}")
+            LOGGER.error(f"Error executing BLE request {method}: {e}")
             return False, None
 
 
-# BLE Client global instance
+# Global context variables
 ble_client_global = None
+mqtt_connected = False
 
 def publish_discovery(mqtt_client):
     dev_info = {"identifiers": [DEVICE_ID], "name": DEVICE_NAME, "manufacturer": "Wallbox"}
@@ -138,11 +139,11 @@ def publish_discovery(mqtt_client):
         "value_template": "{{ value_json.status }}", "unique_id": f"{DEVICE_ID}_status", "device": dev_info
     }), qos=1, retain=True)
 
-    # Wallbox Ready Binary Sensor (st == 0)
-    mqtt_client.publish(f"homeassistant/binary_sensor/{DEVICE_ID}_ready/config", json.dumps({
-        "name": "Ready", "state_topic": state_topic,
-        "value_template": "{{ 'ON' if value_json.status_code == 0 else 'OFF' }}",
-        "device_class": "connectivity", "unique_id": f"{DEVICE_ID}_ready", "device": dev_info
+# Car Connected Binary Sensor (st in [0, 1, 2, 3, 4, 5, 8, 10, 11, 12, 13, 18])
+    mqtt_client.publish(f"homeassistant/binary_sensor/{DEVICE_ID}_connected/config", json.dumps({
+        "name": "Car Connected", "state_topic": state_topic,
+        "value_template": "{{ 'ON' if value_json.status_code in [0, 1, 2, 3, 4, 5, 8, 10, 11, 12, 13, 18] else 'OFF' }}",
+        "device_class": "plug", "unique_id": f"{DEVICE_ID}_connected", "device": dev_info
     }), qos=1, retain=True)
 
     # Wallbox Charging Binary Sensor (st == 1)
@@ -202,25 +203,26 @@ async def handle_mqtt_command(topic, msg_payload):
             state = 1 if msg_payload == "ON" else 0
             await ble_client_global.request(WallboxBLEApiConst.START_STOP_CHARGING, state)
     except Exception as e:
-        LOGGER.error(f"Error while sending command to charger : {e}")
+        LOGGER.error(f"Error while sending command to charger: {e}")
 
 def on_message(client, topic, payload, qos, properties):
     """Synchronous Callback required by gmqtt."""
     try:
         msg_payload = payload.decode()
-        LOGGER.info(f"MQTT command received : {topic} -> {msg_payload}")
+        LOGGER.info(f"MQTT command received: {topic} -> {msg_payload}")
         
         if ble_client_global is not None and ble_client_global.client and ble_client_global.client.is_connected:
-            # Pushing asynchronous execution in main event loop
             asyncio.create_task(handle_mqtt_command(topic, msg_payload))
         else:
-            LOGGER.warning("MQTT Command ignored : the charger is not ready over Bluetooth.")
+            LOGGER.warning("MQTT Command ignored: the charger is not ready over Bluetooth.")
     except Exception as e:
-        LOGGER.error(f"Error processing MQTT command : {e}")
+        LOGGER.error(f"Error processing MQTT command: {e}")
 
 def on_connect(client, flags, rc, properties):
     """Synchronous Callback required by gmqtt."""
-    LOGGER.info("✅ Succesfully connected to MQTT Broker.")
+    global mqtt_connected
+    mqtt_connected = True
+    LOGGER.info("✅ Successfully connected to MQTT Broker.")
     client.subscribe(f"homeassistant/lock/{DEVICE_ID}/set")
     client.subscribe(f"homeassistant/number/{DEVICE_ID}/set")
     client.subscribe(f"homeassistant/switch/{DEVICE_ID}/set")
@@ -228,11 +230,13 @@ def on_connect(client, flags, rc, properties):
 
 def on_disconnect(client, packet, exc=None):
     """Synchronous Callback required by gmqtt."""
-    LOGGER.warning(f"❌ Disconnected from MQTT Broker. Motive : {exc}")
+    global mqtt_connected
+    mqtt_connected = False
+    LOGGER.warning(f"❌ Disconnected from MQTT Broker. Reason: {exc}")
 
 
 async def main():
-    global ble_client_global
+    global ble_client_global, mqtt_connected
     
     ble_client_global = WallboxBLEApiClient(WALLBOX_MAC)
     
@@ -243,22 +247,38 @@ async def main():
     
     if MQTT_USER and MQTT_PASSWORD:
         mqtt_client.set_auth_credentials(MQTT_USER, MQTT_PASSWORD)
-        
-    await mqtt_client.connect(MQTT_BROKER, MQTT_PORT, version=MQTTv311)
 
     max_charge_current = 32
 
     while True:
         try:
+            # Reconnect MQTT if connection dropped before setting up BLE
+            if not mqtt_connected:
+                LOGGER.info("Connecting to MQTT Broker...")
+                try:
+                    await mqtt_client.connect(MQTT_BROKER, MQTT_PORT, version=MQTTv311)
+                    await asyncio.sleep(1)
+                except Exception as mqtt_err:
+                    LOGGER.error(f"Failed to connect to MQTT Broker: {mqtt_err}. Retrying in 5 seconds...")
+                    await asyncio.sleep(5)
+                    continue
+
             await ble_client_global.connect()
             
-            # 1. Max current state
             ok, max_curr = await ble_client_global.request(WallboxBLEApiConst.GET_MAX_AVAILABLE_CURRENT)
             if ok and max_curr:
                 max_charge_current = max_curr
 
             while ble_client_global.client.is_connected:
-                # 2. Status query loop
+                # Handle mid-loop MQTT disconnections without losing BLE context
+                if not mqtt_connected:
+                    LOGGER.warning("MQTT connection lost mid-loop. Attempting reconnection...")
+                    try:
+                        await mqtt_client.connect(MQTT_BROKER, MQTT_PORT, version=MQTTv311)
+                        await asyncio.sleep(1)
+                    except Exception as mqtt_err:
+                        LOGGER.error(f"MQTT reconnection failed: {mqtt_err}. Retrying next cycle.")
+                
                 ok, data = await ble_client_global.request(WallboxBLEApiConst.GET_STATUS)
                 if ok and data:
                     LOGGER.info(f"Raw r_dat received: {data}")
@@ -281,13 +301,17 @@ async def main():
                         "charging_power": charging_power,
                         "session_energy": session_energy
                     }
-                    LOGGER.info(f"Update sent to MQTT : {payload}")
+                    
+                    if mqtt_connected:
+                        LOGGER.info(f"Update sent to MQTT: {payload}")
                     mqtt_client.publish(f"homeassistant/sensor/{DEVICE_ID}/state", json.dumps(payload), retain=True)
+                    else:
+                        LOGGER.warning(f"MQTT offline. Skip publishing to prevent socket errors. State: {payload}")
                 
-                await asyncio.sleep(10)
+                await asyncio.sleep(5)
                 
         except Exception as e:
-            LOGGER.error(f"Error communicating : {e}. New attempt in 10 seconds...")
+            LOGGER.error(f"Error communicating: {e}. New attempt in 10 seconds...")
             await asyncio.sleep(10)
 
 if __name__ == "__main__":
