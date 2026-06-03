@@ -132,22 +132,36 @@ def publish_discovery(mqtt_client):
     dev_info = {"identifiers": [DEVICE_ID], "name": DEVICE_NAME, "manufacturer": "Wallbox"}
     state_topic = f"homeassistant/sensor/{DEVICE_ID}/state"
     
-    # Status
+    # Status (Main text sensor)
     mqtt_client.publish(f"homeassistant/sensor/{DEVICE_ID}_status/config", json.dumps({
-        "name": "Wallbox Status", "state_topic": state_topic,
+        "name": "Status", "state_topic": state_topic,
         "value_template": "{{ value_json.status }}", "unique_id": f"{DEVICE_ID}_status", "device": dev_info
+    }), qos=1, retain=True)
+
+    # Wallbox Ready Binary Sensor (st == 0)
+    mqtt_client.publish(f"homeassistant/binary_sensor/{DEVICE_ID}_ready/config", json.dumps({
+        "name": "Ready", "state_topic": state_topic,
+        "value_template": "{{ 'ON' if value_json.status_code == 0 else 'OFF' }}",
+        "device_class": "connectivity", "unique_id": f"{DEVICE_ID}_ready", "device": dev_info
+    }), qos=1, retain=True)
+
+    # Wallbox Charging Binary Sensor (st == 1)
+    mqtt_client.publish(f"homeassistant/binary_sensor/{DEVICE_ID}_charging/config", json.dumps({
+        "name": "Charging", "state_topic": state_topic,
+        "value_template": "{{ 'ON' if value_json.status_code == 1 else 'OFF' }}",
+        "device_class": "battery_charging", "unique_id": f"{DEVICE_ID}_charging", "device": dev_info
     }), qos=1, retain=True)
 
     # Lock
     mqtt_client.publish(f"homeassistant/lock/{DEVICE_ID}/config", json.dumps({
-        "name": "Wallbox Lock", "state_topic": state_topic,
+        "name": "Lock", "state_topic": state_topic,
         "value_template": "{{ 'LOCKED' if value_json.status_code == 6 else 'UNLOCKED' }}",
         "command_topic": f"homeassistant/lock/{DEVICE_ID}/set", "unique_id": f"{DEVICE_ID}_lock", "device": dev_info
     }), qos=1, retain=True)
 
     # Current
     mqtt_client.publish(f"homeassistant/number/{DEVICE_ID}_current/config", json.dumps({
-        "name": "Wallbox Charge Current", "state_topic": state_topic,
+        "name": "Charge Current", "state_topic": state_topic,
         "value_template": "{{ value_json.charge_current }}", "command_topic": f"homeassistant/number/{DEVICE_ID}/set",
         "min": 6, "max": 32, "step": 1, "unit_of_measurement": "A", "device_class": "current",
         "unique_id": f"{DEVICE_ID}_current", "device": dev_info
@@ -155,21 +169,21 @@ def publish_discovery(mqtt_client):
 
     # Charge Switch
     mqtt_client.publish(f"homeassistant/switch/{DEVICE_ID}_charge/config", json.dumps({
-        "name": "Wallbox Charge Switch", "state_topic": state_topic,
+        "name": "Charge Switch", "state_topic": state_topic,
         "value_template": "{{ 'ON' if value_json.status_code == 1 else 'OFF' }}",
         "command_topic": f"homeassistant/switch/{DEVICE_ID}/set", "unique_id": f"{DEVICE_ID}_switch", "device": dev_info
     }), qos=1, retain=True)
 
     # Power Sensor
     mqtt_client.publish(f"homeassistant/sensor/{DEVICE_ID}_power/config", json.dumps({
-        "name": "Wallbox Charging Power", "state_topic": state_topic,
+        "name": "Charging Power", "state_topic": state_topic,
         "value_template": "{{ value_json.charging_power }}", "unit_of_measurement": "kW",
         "device_class": "power", "state_class": "measurement", "unique_id": f"{DEVICE_ID}_power", "device": dev_info
     }), qos=1, retain=True)
 
     # Energy Meter
     mqtt_client.publish(f"homeassistant/sensor/{DEVICE_ID}_energy/config", json.dumps({
-        "name": "Wallbox Session Energy", "state_topic": state_topic,
+        "name": "Session Energy", "state_topic": state_topic,
         "value_template": "{{ value_json.session_energy }}", "unit_of_measurement": "kWh",
         "device_class": "energy", "state_class": "total_increasing", "unique_id": f"{DEVICE_ID}_energy", "device": dev_info
     }), qos=1, retain=True)
@@ -247,17 +261,17 @@ async def main():
                 # 2. Status query loop
                 ok, data = await ble_client_global.request(WallboxBLEApiConst.GET_STATUS)
                 if ok and data:
+                    LOGGER.info(f"Raw r_dat received: {data}")
+                    
                     status_code = data.get("st", 0)
                     status_name = WallboxBLEApiConst.STATUS_CODES[status_code] if status_code < len(WallboxBLEApiConst.STATUS_CODES) else "UNKNOWN"
                     charge_current = data.get("cur", 6)
                     
-                    # Power query (conversion W -> kW if necessary)
-                    raw_power = data.get("pow", data.get("pwr", 0.0))
-                    charging_power = round(raw_power / 1000.0, 2) if raw_power > 100 else raw_power
+                    # Charging power extraction ('cp' key is already in kW)
+                    charging_power = round(data.get("cp", 0.0), 2)
                     
-                    # Retrieval of session energy (conversion Wh -> kWh if necessary)
-                    raw_energy = data.get("en", data.get("ene", data.get("dep", 0.0)))
-                    session_energy = round(raw_energy / 1000.0, 2) if raw_energy > 50 else raw_energy
+                    # Retrieval of session energy ('en' key is in daWh, divide by 100.0 for kWh)
+                    session_energy = round(data.get("en", 0.0) / 100.0, 2)
                     
                     payload = {
                         "status": status_name,
