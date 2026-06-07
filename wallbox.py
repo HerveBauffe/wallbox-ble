@@ -139,10 +139,10 @@ def publish_discovery(mqtt_client):
         "value_template": "{{ value_json.status }}", "unique_id": f"{DEVICE_ID}_status", "device": dev_info
     }), qos=1, retain=True)
 
-# Car Connected Binary Sensor (st in [0, 1, 2, 3, 4, 5, 8, 10, 11, 12, 13, 18])
+# Car Connected Binary Sensor (st in [1, 2, 3, 4, 5, 8, 10, 11, 12, 13, 18])
     mqtt_client.publish(f"homeassistant/binary_sensor/{DEVICE_ID}_connected/config", json.dumps({
         "name": "Car Connected", "state_topic": state_topic,
-        "value_template": "{{ 'ON' if value_json.status_code in [0, 1, 2, 3, 4, 5, 8, 10, 11, 12, 13, 18] else 'OFF' }}",
+        "value_template": "{{ 'ON' if value_json.status_code in [1, 2, 3, 4, 5, 8, 10, 11, 12, 13, 18] else 'OFF' }}",
         "device_class": "plug", "unique_id": f"{DEVICE_ID}_connected", "device": dev_info
     }), qos=1, retain=True)
 
@@ -156,7 +156,7 @@ def publish_discovery(mqtt_client):
     # Lock
     mqtt_client.publish(f"homeassistant/lock/{DEVICE_ID}/config", json.dumps({
         "name": "Lock", "state_topic": state_topic,
-        "value_template": "{{ 'LOCKED' if value_json.status_code != 6 else 'UNLOCKED' }}",
+        "value_template": "{{ 'LOCKED' if value_json.status_code != 0 else 'UNLOCKED' }}",
         "command_topic": f"homeassistant/lock/{DEVICE_ID}/set", "unique_id": f"{DEVICE_ID}_lock", "device": dev_info
     }), qos=1, retain=True)
 
